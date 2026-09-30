@@ -9,7 +9,7 @@ This public repository contains only the cloud collector, connectivity probe, an
 - Alerts: a run fails, and GitHub emails the owner, once when match feeds become stale (45 minutes without a successful check). Partial or empty checks pass and show in the site's health status. If another collection or backup holds the archive lease, the run skips cleanly.
 - Main timer: a Cloudflare cron on the hub re-enables and dispatches this workflow whenever no check has started for 16 minutes. GitHub's schedule is a second trigger.
 - The daily backup fails, and emails the owner, if the database passes the 400 MB free-tier warning threshold.
-- Backups run daily at 04:11 UTC to a separate private repository using a repository-scoped deploy key. Never upload backup artifacts to this public repository.
+- Backups run daily to a separate private repository using a repository-scoped deploy key. The hub's cron starts one whenever the last began over 24 hours ago and retries hourly if it never starts; the 04:11 UTC GitHub schedule is a second trigger. Never upload backup artifacts to this public repository.
 - Secrets belong in GitHub Actions secrets, never source files or logs. There are no pull-request workflows with access to secrets.
 - Public repository schedules may be disabled by GitHub after 60 days without repository activity. Check Actions settings and re-enable if needed; the site health indicator will flag stopped collection.
 
