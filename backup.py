@@ -37,6 +37,11 @@ def run():
             export['tables'][table] = rows
     finally:
         api('/admin/backup/finish', {'backupId': backup_id}, token)
+    # Refuse to save a partial export: every table must match the row count taken under the lease.
+    for table, expected in (start.get('counts') or {}).items():
+        got = len(export['tables'].get(table, []))
+        if got != expected:
+            raise RuntimeError(f'Backup incomplete: {table} exported {got} of {expected} rows')
     data = json.dumps(export, separators=(',', ':')).encode()
     out = Path(os.environ.get('BACKUP_DIR', 'backups'))
     out.mkdir(parents=True, exist_ok=True)
@@ -47,6 +52,10 @@ def run():
     target = out / name
     temp = target.with_suffix('.tmp')
     temp.write_bytes(compressed)
+    # Read the file back before it replaces yesterday's: it must decompress to exactly this export.
+    if gzip.decompress(temp.read_bytes()) != data:
+        temp.unlink()
+        raise RuntimeError('Backup file failed read-back verification')
     temp.replace(target)
     target.with_suffix('.sha256').write_text(hashlib.sha256(compressed).hexdigest() + '\n')
     for old in sorted(out.glob('gt3rs-????-??-??.json.gz'))[:-30]:
