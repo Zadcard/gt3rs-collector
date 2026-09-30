@@ -1,0 +1,42 @@
+name: Private daily archive backup
+on:
+  schedule:
+    - cron: '11 4 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: club-backup
+  cancel-in-progress: false
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Open private backup repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: Zadcard/gt3rs-archive-backups
+          path: private-backup
+          ssh-key: ${{ secrets.BACKUP_DEPLOY_KEY }}
+      - name: Export a consistent database snapshot
+        env:
+          BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
+          BACKUP_DIR: private-backup/backups
+        run: python backup.py
+      - name: Save private backup
+        working-directory: private-backup
+        run: |
+          git config user.name 'GT3 RS backup'
+          git config user.email 'backup@users.noreply.github.com'
+          git add backups
+          git diff --cached --quiet || git commit -m 'Save daily archive recovery snapshot'
+          git push origin HEAD:main
