@@ -53,6 +53,12 @@ def run():
         old.unlink()
         old.with_suffix('.sha256').unlink(missing_ok=True)
     print(f'Private backup ready: {len(export["tables"]["matches"])} matches; {len(compressed)} compressed bytes')
+    size, limit = start.get('databaseBytes'), start.get('storageWarnBytes')
+    if size is not None:
+        print(f'Database size: {size / 1_048_576:.1f} MB')
+    # The backup is already written; failing now emails the owner about quota headroom.
+    if size and limit and size > limit:
+        raise RuntimeError(f'Database is {size / 1_048_576:.0f} MB, above the {limit / 1_048_576:.0f} MB free-tier warning threshold')
 
 
 if __name__ == '__main__':

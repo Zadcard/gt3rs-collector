@@ -49,7 +49,13 @@ def ea(path, deadline):
 def run():
     if not TOKEN:
         raise RuntimeError('Missing collector credential')
-    run_id = api('/admin/start', {}, retries=0)['runId']
+    try:
+        run_id = api('/admin/start', {}, retries=0)['runId']
+    except RuntimeError as error:
+        if 'HTTP 409' in str(error):
+            print('Another collection or backup is active; skipping this check')
+            return 0
+        raise
     deadline = time.monotonic() + 170
     states = {}
     endpoints = [(kind, f'clubs/matches?platform=common-gen5&clubIds=205974&matchType={kind}&maxResultCount=10') for kind in FEEDS]
@@ -83,8 +89,14 @@ def run():
             time.sleep(1)
     finally:
         result = api('/admin/finish', {'runId': run_id, 'endpoints': states})
-    print('Collection: ' + result['status'])
-    return 0 if result['status'] == 'success' else 1
+    print('Collection: ' + result['status'] + (' (stale)' if result.get('stale') else ''))
+    if result.get('recovered'):
+        print('Match feeds recovered after a stale period')
+    # Fail the run (GitHub emails the owner) once per stale episode, not on every partial check.
+    if result.get('alert'):
+        print('ALERT: no successful match-feed check for over 45 minutes')
+        return 1
+    return 0
 
 
 if __name__ == '__main__':
