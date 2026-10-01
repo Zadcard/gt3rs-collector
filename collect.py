@@ -7,7 +7,8 @@ from curl_cffi import requests
 HUB = os.environ.get('HUB_URL', 'https://gt3rs-hub.zadcard06.workers.dev').rstrip('/')
 TOKEN = os.environ.get('COLLECTOR_TOKEN', '')
 FEEDS = ('leagueMatch', 'playoffMatch', 'friendlyMatch')
-CLUB = '205974'
+CLUB = '205974'  # GT3 RS (club.json in the hub repo)
+PLATFORM = 'common-gen5'
 
 
 def api(path, payload, token=None, retries=1):
@@ -51,7 +52,7 @@ def save_opponent(run_id, match, deadline):
     """Record the opponent's EA record right after a new match. Best effort: never affects saving the match."""
     try:
         opponent = next(c for c in match.get('clubs', {}) if c != CLUB)
-        stats = ea(f'clubs/overallStats?platform=common-gen5&clubIds={opponent}', deadline)
+        stats = ea(f'clubs/overallStats?platform={PLATFORM}&clubIds={opponent}', deadline)
         api('/admin/opponent', {'runId': run_id, 'matchId': str(match.get('matchId')), 'clubId': opponent, 'data': stats})
     except Exception:
         print('Opponent strength unavailable for one match', flush=True)
@@ -80,10 +81,10 @@ def run():
     saved_new = False
     deadline = time.monotonic() + 170
     states = {}
-    endpoints = [(kind, f'clubs/matches?platform=common-gen5&clubIds=205974&matchType={kind}&maxResultCount=10') for kind in FEEDS]
-    endpoints += [('info', 'clubs/info?platform=common-gen5&clubIds=205974'),
-                  ('overallStats', 'clubs/overallStats?platform=common-gen5&clubIds=205974'),
-                  ('members', 'members/stats?platform=common-gen5&clubId=205974')]
+    endpoints = [(kind, f'clubs/matches?platform={PLATFORM}&clubIds={CLUB}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
+    endpoints += [('info', f'clubs/info?platform={PLATFORM}&clubIds={CLUB}'),
+                  ('overallStats', f'clubs/overallStats?platform={PLATFORM}&clubIds={CLUB}'),
+                  ('members', f'members/stats?platform={PLATFORM}&clubId={CLUB}')]
     try:
         for key, path in endpoints:
             wanted = plan.get(key, 'always')

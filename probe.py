@@ -3,11 +3,12 @@ import json
 import time
 from curl_cffi import requests
 
+CLUB, PLATFORM = '205974', 'common-gen5'
 paths = [
-    'clubs/info?platform=common-gen5&clubIds=205974',
-    'clubs/overallStats?platform=common-gen5&clubIds=205974',
-    'members/stats?platform=common-gen5&clubId=205974',
-] + [f'clubs/matches?platform=common-gen5&clubIds=205974&matchType={kind}&maxResultCount=10'
+    f'clubs/info?platform={PLATFORM}&clubIds={CLUB}',
+    f'clubs/overallStats?platform={PLATFORM}&clubIds={CLUB}',
+    f'members/stats?platform={PLATFORM}&clubId={CLUB}',
+] + [f'clubs/matches?platform={PLATFORM}&clubIds={CLUB}&matchType={kind}&maxResultCount=10'
      for kind in ('leagueMatch', 'playoffMatch', 'friendlyMatch')]
 results = []
 for path in paths:
