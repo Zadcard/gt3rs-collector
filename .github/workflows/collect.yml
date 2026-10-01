@@ -1,8 +1,9 @@
 name: Collect club matches
 on:
   schedule:
-    # Every 15 minutes (UTC). The hub's COLLECT_MINUTES must match for the site countdown.
-    - cron: '7,22,37,52 * * * *'
+    # Fallback only: the hub's timer starts checks (about every 16 minutes while the club is playing, hourly
+    # otherwise) and turns this one away while that timer is working.
+    - cron: '37 * * * *'
   workflow_dispatch:
 permissions:
   contents: read

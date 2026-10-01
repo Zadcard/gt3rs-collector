@@ -61,12 +61,23 @@ def run():
     if not TOKEN:
         raise RuntimeError('Missing collector credential')
     try:
-        run_id = api('/admin/start', {}, retries=0)['runId']
+        start = api('/admin/start', {'trigger': os.environ.get('GITHUB_EVENT_NAME', '')}, retries=0)
     except RuntimeError as error:
         if 'HTTP 409' in str(error):
             print('Another collection or backup is active; skipping this check')
             return 0
         raise
+    # The hub schedules checks; GitHub's own schedule only runs when the hub's timer has stopped.
+    if start.get('skip'):
+        print('Not due yet (the hub schedules checks); skipping this one')
+        return 0
+    run_id = start['runId']
+    # What to ask EA for this run: 'always', 'if-new' (only after saving a new match) or 'skip'. An older hub
+    # sends no plan, which means everything.
+    plan = start.get('plan') or {}
+    if start.get('mode'):
+        print('Mode: ' + start['mode'], flush=True)
+    saved_new = False
     deadline = time.monotonic() + 170
     states = {}
     endpoints = [(kind, f'clubs/matches?platform=common-gen5&clubIds=205974&matchType={kind}&maxResultCount=10') for kind in FEEDS]
@@ -75,6 +86,11 @@ def run():
                   ('members', 'members/stats?platform=common-gen5&clubId=205974')]
     try:
         for key, path in endpoints:
+            wanted = plan.get(key, 'always')
+            if wanted == 'skip' or (wanted == 'if-new' and not saved_new):
+                states[key] = {'state': 'skipped'}
+                print(key + ': skipped', flush=True)
+                continue
             try:
                 data = ea(path, deadline)
                 if key in FEEDS:
@@ -91,6 +107,7 @@ def run():
                             failures += 1
                             continue
                         if isinstance(saved, dict) and saved.get('state') == 'new':
+                            saved_new = True
                             save_opponent(run_id, match, deadline)
                     if failures:
                         raise RuntimeError(f'{failures} match records failed validation or persistence')
