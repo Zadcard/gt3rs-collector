@@ -110,6 +110,10 @@ def run():
     if result.get('alert'):
         print('ALERT: no successful match-feed check for over 45 minutes')
         return 1
+    # Likewise once when EA starts sending match records the hub cannot read (they are kept for review).
+    if result.get('reviewAlert'):
+        print(f'ALERT: {result.get("unreadable")} match record(s) could not be read and were kept for review')
+        return 1
     return 0
 
 

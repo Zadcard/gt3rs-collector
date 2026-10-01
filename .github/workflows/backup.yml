@@ -40,3 +40,7 @@ jobs:
           git add backups
           git diff --cached --quiet || git commit -m 'Save daily archive recovery snapshot'
           git push origin HEAD:main
+      - name: Record the completed backup
+        env:
+          BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
+        run: python backup.py --complete
