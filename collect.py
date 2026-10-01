@@ -7,6 +7,7 @@ from curl_cffi import requests
 HUB = os.environ.get('HUB_URL', 'https://gt3rs-hub.zadcard06.workers.dev').rstrip('/')
 TOKEN = os.environ.get('COLLECTOR_TOKEN', '')
 FEEDS = ('leagueMatch', 'playoffMatch', 'friendlyMatch')
+CLUB = '205974'
 
 
 def api(path, payload, token=None, retries=1):
@@ -46,6 +47,16 @@ def ea(path, deadline):
             time.sleep(2)
 
 
+def save_opponent(run_id, match, deadline):
+    """Record the opponent's EA record right after a new match. Best effort: never affects saving the match."""
+    try:
+        opponent = next(c for c in match.get('clubs', {}) if c != CLUB)
+        stats = ea(f'clubs/overallStats?platform=common-gen5&clubIds={opponent}', deadline)
+        api('/admin/opponent', {'runId': run_id, 'matchId': str(match.get('matchId')), 'clubId': opponent, 'data': stats})
+    except Exception:
+        print('Opponent strength unavailable for one match', flush=True)
+
+
 def run():
     if not TOKEN:
         raise RuntimeError('Missing collector credential')
@@ -75,9 +86,12 @@ def run():
                             if not isinstance(match, dict):
                                 raise RuntimeError('Invalid match record')
                             match['_matchType'] = key
-                            api('/admin/match', {'runId': run_id, 'match': match})
+                            saved = api('/admin/match', {'runId': run_id, 'match': match})
                         except RuntimeError:
                             failures += 1
+                            continue
+                        if isinstance(saved, dict) and saved.get('state') == 'new':
+                            save_opponent(run_id, match, deadline)
                     if failures:
                         raise RuntimeError(f'{failures} match records failed validation or persistence')
                 else:
