@@ -192,7 +192,7 @@ def search_clubs(query, platform, deadline):
     succeeded = False
     for endpoint in ('allTimeLeaderboard/search', 'currentSeasonLeaderboard/search'):
         try:
-            data = ea(endpoint + '?' + urlencode({'platform': platform, 'clubName': query, 'maxResultCount': 50}), deadline)
+            data = ea(endpoint + '?' + urlencode({'platform': platform, 'clubName': query, 'maxResultCount': 100}), deadline)
             if not isinstance(data, (list, dict)):
                 raise RuntimeError('Invalid search response')
             items = list(data.values()) if isinstance(data, dict) else data
