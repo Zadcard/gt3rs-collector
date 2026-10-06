@@ -146,12 +146,18 @@ def run_registered(*, workers=1, return_count=False):
         identity = {'platform': platform, 'clubId': club_id, 'runId': club['runId']}
         deadline = time.monotonic() + 170
         states = {}
+        plan = club.get('plan') or {}
+        saved_new = False
         endpoints = [(kind, f'clubs/matches?platform={platform}&clubIds={club_id}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
         endpoints += [('info', f'clubs/info?platform={platform}&clubIds={club_id}'),
                       ('overallStats', f'clubs/overallStats?platform={platform}&clubIds={club_id}'),
                       ('members', f'members/stats?platform={platform}&clubId={club_id}')]
         try:
             for key, path in endpoints:
+                wanted = plan.get(key, 'always')
+                if wanted == 'skip' or (wanted == 'if-new' and not saved_new):
+                    states[key] = {'state': 'skipped'}
+                    continue
                 try:
                     data = ea(path, deadline)
                     if key in FEEDS:
@@ -164,8 +170,10 @@ def run_registered(*, workers=1, return_count=False):
                                     raise RuntimeError('Invalid match record')
                                 match['_matchType'] = key
                                 saved = api('/admin/clubs/match', {**identity, 'match': match})
-                                if saved.get('state') == 'quarantined':
+                                if saved.get('state') in ('quarantined', 'held'):
                                     failed += 1
+                                if saved.get('state') == 'new':
+                                    saved_new = True
                             except RuntimeError:
                                 failed += 1
                         if failed:
@@ -192,7 +200,10 @@ def run_registered(*, workers=1, return_count=False):
                         print('One club check failed; other clubs continue', flush=True)
         else:
             for club in clubs:
-                capture(club)
+                try:
+                    capture(club)
+                except Exception:
+                    print('One club check failed; other clubs continue', flush=True)
     finally:
         if lease:
             api('/admin/clubs/release', {'lease': lease})
