@@ -13,7 +13,7 @@ Render background workers run continuously: https://render.com/docs/background-w
 5. Verify the dashboard says **Live checks every minute** for an active club or **Checks every 5 minutes** for an idle club. Confirm all three match feeds succeed and the latest successful-check timestamp advances across several cycles.
 6. Verify EA access from the chosen host before relying on the latency target. A healthy process heartbeat alone does not prove EA is answering. If the host is blocked or rate-limited, saved data remains available and the dashboard reports delayed collection.
 
-The prepared image has not been built locally because Docker's daemon is not running. The Python service and hub integration have automated tests. Render must build the image and pass the live verification above before one-minute collection is considered activated.
+The image was built and its packaged modules imported successfully in GitHub validation run 37484914490: https://github.com/Zadcard/gt3rs-collector/actions/runs/37484914490. The Python service and hub integration also have automated tests. Render must pass the live verification above before one-minute collection is considered activated.
 
 ## Existing Docker server alternative
 
