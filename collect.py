@@ -2,6 +2,8 @@
 import json
 import os
 import time
+import re
+from urllib.parse import urlencode
 from curl_cffi import requests
 
 HUB = os.environ.get('HUB_URL', 'https://gt3rs-hub.zadcard06.workers.dev').rstrip('/')
@@ -135,9 +137,102 @@ def run():
     return 0
 
 
+def run_registered():
+    """Collect each claimed club with its own identity; the hub owns scheduling and overlap control."""
+    claimed = api('/admin/clubs/claim', {}, retries=0)
+    lease = claimed.get('lease')
+    try:
+        for club in claimed.get('clubs', []):
+            platform, club_id = club['platform'], club['clubId']
+            identity = {'platform': platform, 'clubId': club_id, 'runId': club['runId']}
+            deadline = time.monotonic() + 170
+            states = {}
+            endpoints = [(kind, f'clubs/matches?platform={platform}&clubIds={club_id}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
+            endpoints += [('info', f'clubs/info?platform={platform}&clubIds={club_id}'),
+                          ('overallStats', f'clubs/overallStats?platform={platform}&clubIds={club_id}'),
+                          ('members', f'members/stats?platform={platform}&clubId={club_id}')]
+            try:
+                for key, path in endpoints:
+                    try:
+                        data = ea(path, deadline)
+                        if key in FEEDS:
+                            if not isinstance(data, list) or len(data) > 10:
+                                raise RuntimeError('Invalid match feed')
+                            failed = 0
+                            for match in data:
+                                try:
+                                    if not isinstance(match, dict):
+                                        raise RuntimeError('Invalid match record')
+                                    match['_matchType'] = key
+                                    saved = api('/admin/clubs/match', {**identity, 'match': match})
+                                    if saved.get('state') == 'quarantined':
+                                        failed += 1
+                                except RuntimeError:
+                                    failed += 1
+                            if failed:
+                                raise RuntimeError(f'{failed} match records failed persistence')
+                        else:
+                            api('/admin/clubs/snapshot', {**identity, 'component': key, 'data': data})
+                        states[key] = {'state': 'ok'}
+                    except Exception as error:
+                        states[key] = {'state': 'error', 'reason': str(error)[:120]}
+                    time.sleep(1)
+            finally:
+                result = api('/admin/clubs/finish', {**identity, 'endpoints': states})
+            print('Registered club collection: ' + result['status'], flush=True)
+    finally:
+        if lease:
+            api('/admin/clubs/release', {'lease': lease})
+    return 0
+
+
+def search_clubs(query, platform, deadline):
+    """Search public club names; no EA account login or numeric ID needed."""
+    results = {}
+    succeeded = False
+    for endpoint in ('allTimeLeaderboard/search', 'currentSeasonLeaderboard/search'):
+        try:
+            data = ea(endpoint + '?' + urlencode({'platform': platform, 'clubName': query, 'maxResultCount': 50}), deadline)
+            if not isinstance(data, (list, dict)):
+                raise RuntimeError('Invalid search response')
+            items = list(data.values()) if isinstance(data, dict) else data
+            if any(not isinstance(item, dict) for item in items):
+                raise RuntimeError('Invalid search response')
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                info = item.get('clubInfo') or item
+                club_id = str(info.get('clubId') or item.get('clubId') or '')
+                name = info.get('name') or item.get('clubName') or item.get('name')
+                if re.fullmatch(r'[0-9]{1,20}', club_id) and isinstance(name, str) and 0 < len(name.strip()) <= 120 and not re.search(r'[\x00-\x1f]', name):
+                    results[club_id] = {'clubId': club_id, 'name': name.strip()}
+            succeeded = True
+        except Exception:
+            continue
+    if not succeeded:
+        raise RuntimeError('EA club search unavailable')
+    return list(results.values())[:30]
+
+
+def run_searches():
+    jobs = api('/admin/clubs/search/claim', {})['jobs']
+    deadline = time.monotonic() + 120
+    for job in jobs:
+        payload = {'id': job['id'], 'runId': job['runId'], 'results': []}
+        try:
+            payload['results'] = search_clubs(job['query'], job['platform'], deadline)
+        except Exception:
+            payload['failed'] = True
+        api('/admin/clubs/search/result', payload)
+    print(f'Completed {len(jobs)} club searches', flush=True)
+
+
 if __name__ == '__main__':
     try:
-        raise SystemExit(run())
+        run_searches()
+        legacy_result = run()
+        run_registered()
+        raise SystemExit(legacy_result)
     except RuntimeError as error:
         print(str(error))
         raise SystemExit(1)
