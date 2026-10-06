@@ -1,0 +1,16 @@
+services:
+  collector:
+    build: .
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 5m
+    environment:
+      HUB_URL: https://gt3rs-hub.zadcard06.workers.dev
+      COLLECTOR_TOKEN: ${COLLECTOR_TOKEN:?Set the collector token in your host's secret environment}
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

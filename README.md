@@ -2,9 +2,9 @@
 
 This public repository contains only the cloud collector, connectivity probe, and workflow definitions. The website source, database, raw match payloads, backups, and credentials are stored separately.
 
-- The hub decides when to check: about every 16 minutes while the club is playing (a match in the last 3 hours, or a Refresh tap in the last hour) and hourly otherwise. EA lists the last 10 matches per type, so hourly checks cannot miss a match.
-- Each run asks the hub what to fetch: all three match feeds; club record and squad stats every run while playing, otherwise only after a new match (or every 6 hours); club info daily. An endpoint that fails twice in a row waits 30 minutes, then 1 hour, then 2 hours between tries.
-- The site marks match feeds stale after 45 minutes without a successful check while playing (105 minutes otherwise).
+- The hub decides when to check: every minute while the club is active (a match in the last 3 hours, or a Refresh request in the last hour) and every five minutes otherwise. These are resident-service targets. Without that service, the existing Cloudflare timer dispatches the GitHub fallback about every five minutes, plus runner startup and queue time. EA's recent window cannot guarantee no losses during an outage.
+- Each run asks the hub what to fetch: all three match feeds; club record and squad stats every run while playing, otherwise only after a new match (or every 6 hours); club info daily. Failing match feeds retry after one minute, with backoff capped at five minutes. Non-match endpoints retain their longer backoff.
+- The site marks match feeds stale after five minutes without a successful match-feed check while playing (15 minutes otherwise).
 - League, playoff, and friendly results are validated and merged independently. A failed feed cannot erase archived matches.
 - Match records the hub cannot read (for example after a game update changes EA's format) are kept raw for review instead of being dropped. The first such record fails one run, so GitHub emails the owner once per episode. A newer EA copy of a saved match with fewer players or stats is archived but never replaces the fuller copy.
 - Manual retry: Actions → Collect club matches → Run workflow.
@@ -17,3 +17,7 @@ This public repository contains only the cloud collector, connectivity probe, an
 - Public repository schedules may be disabled by GitHub after 60 days without repository activity. Check Actions settings and re-enable if needed; the site health indicator will flag stopped collection.
 
 Collection success cannot recover matches that EA never exposed or that disappeared during an outage. Unknown statistics stay unlabeled in the private original payloads until supported by evidence.
+
+## Resident service
+
+`daemon.py`, `Dockerfile`, `compose.yml` and `render.yaml` prepare a continuously running service. See [HOSTING.md](HOSTING.md) for activation, secret handling, verification and fallback behavior. Preparing these files does not start a host; the website reports scheduled mode until the service is running and renewing its heartbeat.

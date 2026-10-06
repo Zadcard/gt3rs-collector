@@ -1,8 +1,8 @@
 name: Collect club matches
 on:
   schedule:
-    # Fallback only: the hub's timer starts checks (about every 16 minutes while the club is playing, hourly
-    # otherwise) and turns this one away while that timer is working.
+    # Hourly fallback: the resident collector owns one/five-minute checks when healthy.
+    # The hub cron dispatches every five minutes when the resident collector is offline.
     - cron: '37 * * * *'
   workflow_dispatch:
 permissions:

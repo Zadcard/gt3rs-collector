@@ -128,7 +128,7 @@ def run():
         print('Match feeds recovered after a stale period')
     # Fail the run (GitHub emails the owner) once per stale episode, not on every partial check.
     if result.get('alert'):
-        print('ALERT: no successful match-feed check for over 45 minutes')
+        print('ALERT: match-feed checks are overdue')
         return 1
     # Likewise once when EA starts sending match records the hub cannot read (they are kept for review).
     if result.get('reviewAlert'):
@@ -137,53 +137,66 @@ def run():
     return 0
 
 
-def run_registered():
+def run_registered(*, workers=1, return_count=False):
     """Collect each claimed club with its own identity; the hub owns scheduling and overlap control."""
     claimed = api('/admin/clubs/claim', {}, retries=0)
     lease = claimed.get('lease')
-    try:
-        for club in claimed.get('clubs', []):
-            platform, club_id = club['platform'], club['clubId']
-            identity = {'platform': platform, 'clubId': club_id, 'runId': club['runId']}
-            deadline = time.monotonic() + 170
-            states = {}
-            endpoints = [(kind, f'clubs/matches?platform={platform}&clubIds={club_id}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
-            endpoints += [('info', f'clubs/info?platform={platform}&clubIds={club_id}'),
-                          ('overallStats', f'clubs/overallStats?platform={platform}&clubIds={club_id}'),
-                          ('members', f'members/stats?platform={platform}&clubId={club_id}')]
-            try:
-                for key, path in endpoints:
-                    try:
-                        data = ea(path, deadline)
-                        if key in FEEDS:
-                            if not isinstance(data, list) or len(data) > 10:
-                                raise RuntimeError('Invalid match feed')
-                            failed = 0
-                            for match in data:
-                                try:
-                                    if not isinstance(match, dict):
-                                        raise RuntimeError('Invalid match record')
-                                    match['_matchType'] = key
-                                    saved = api('/admin/clubs/match', {**identity, 'match': match})
-                                    if saved.get('state') == 'quarantined':
-                                        failed += 1
-                                except RuntimeError:
+    def capture(club):
+        platform, club_id = club['platform'], club['clubId']
+        identity = {'platform': platform, 'clubId': club_id, 'runId': club['runId']}
+        deadline = time.monotonic() + 170
+        states = {}
+        endpoints = [(kind, f'clubs/matches?platform={platform}&clubIds={club_id}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
+        endpoints += [('info', f'clubs/info?platform={platform}&clubIds={club_id}'),
+                      ('overallStats', f'clubs/overallStats?platform={platform}&clubIds={club_id}'),
+                      ('members', f'members/stats?platform={platform}&clubId={club_id}')]
+        try:
+            for key, path in endpoints:
+                try:
+                    data = ea(path, deadline)
+                    if key in FEEDS:
+                        if not isinstance(data, list) or len(data) > 10:
+                            raise RuntimeError('Invalid match feed')
+                        failed = 0
+                        for match in data:
+                            try:
+                                if not isinstance(match, dict):
+                                    raise RuntimeError('Invalid match record')
+                                match['_matchType'] = key
+                                saved = api('/admin/clubs/match', {**identity, 'match': match})
+                                if saved.get('state') == 'quarantined':
                                     failed += 1
-                            if failed:
-                                raise RuntimeError(f'{failed} match records failed persistence')
-                        else:
-                            api('/admin/clubs/snapshot', {**identity, 'component': key, 'data': data})
-                        states[key] = {'state': 'ok'}
-                    except Exception as error:
-                        states[key] = {'state': 'error', 'reason': str(error)[:120]}
-                    time.sleep(1)
-            finally:
-                result = api('/admin/clubs/finish', {**identity, 'endpoints': states})
-            print('Registered club collection: ' + result['status'], flush=True)
+                            except RuntimeError:
+                                failed += 1
+                        if failed:
+                            raise RuntimeError(f'{failed} match records failed persistence')
+                    else:
+                        api('/admin/clubs/snapshot', {**identity, 'component': key, 'data': data})
+                    states[key] = {'state': 'ok'}
+                except Exception as error:
+                    states[key] = {'state': 'error', 'reason': str(error)[:120]}
+                time.sleep(1)
+        finally:
+            result = api('/admin/clubs/finish', {**identity, 'endpoints': states})
+        print('Registered club collection: ' + result['status'], flush=True)
+    clubs = claimed.get('clubs', [])
+    try:
+        if workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=min(workers, 2)) as pool:
+                futures = [pool.submit(capture, club) for club in clubs]
+                for future in futures:
+                    try:
+                        future.result()
+                    except Exception:
+                        print('One club check failed; other clubs continue', flush=True)
+        else:
+            for club in clubs:
+                capture(club)
     finally:
         if lease:
             api('/admin/clubs/release', {'lease': lease})
-    return 0
+    return len(clubs) if return_count else 0
 
 
 def search_clubs(query, platform, deadline):
@@ -231,7 +244,10 @@ if __name__ == '__main__':
     try:
         run_searches()
         legacy_result = run()
-        run_registered()
+        drain_until = time.monotonic() + 120
+        while time.monotonic() < drain_until:
+            if not run_registered(workers=2, return_count=True):
+                break
         raise SystemExit(legacy_result)
     except RuntimeError as error:
         print(str(error))

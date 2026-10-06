@@ -1,0 +1,14 @@
+services:
+  - type: worker
+    name: fc-clubs-collector
+    runtime: docker
+    plan: 0.5c-512mb
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: HUB_URL
+        value: https://gt3rs-hub.zadcard06.workers.dev
+      - key: COLLECTOR_TOKEN
+        sync: false
