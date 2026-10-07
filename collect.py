@@ -1,4 +1,5 @@
 """Cloud collector. Public source; credentials and raw data never enter logs/repo."""
+import base64
 import json
 import os
 import time
@@ -50,6 +51,44 @@ def ea(path, deadline):
             time.sleep(2)
 
 
+CREST_URL = 'https://eafc24.content.easports.com/fifa/fltOnlineAssets/24B23FDE-7835-41C2-87A2-F453DFDB2E82/2024/fcweb/crests/256x256/l{}.png'
+
+
+def crest_ids(data):
+    """EA crest asset IDs in a match (both clubs) or a clubs/info response."""
+    clubs = data.get('clubs', {}) if isinstance(data, dict) and 'clubs' in data else data
+    ids = set()
+    if isinstance(clubs, dict):
+        for club in clubs.values():
+            if not isinstance(club, dict):
+                continue
+            kit = (club.get('details') or club).get('customKit') if isinstance(club.get('details') or club, dict) else None
+            value = str(kit.get('crestAssetId', '')).strip() if isinstance(kit, dict) else ''
+            if re.fullmatch(r'[1-9][0-9]{0,11}', value):
+                ids.add(value)
+    return ids
+
+
+def sync_crests(ids, deadline):
+    """Upload crests the hub doesn't have yet. Best effort: never affects collection."""
+    if not ids:
+        return
+    try:
+        missing = api('/admin/crests/missing', {'ids': sorted(ids)[:100]}).get('missing', [])
+        for crest in missing[:20]:
+            if time.monotonic() > deadline:
+                break
+            try:
+                response = requests.get(CREST_URL.format(crest), impersonate='chrome', timeout=10)
+                if response.status_code != 200 or not response.content.startswith(b'\x89PNG') or len(response.content) > 300_000:
+                    continue
+                api('/admin/crests/upload', {'id': crest, 'png': base64.b64encode(response.content).decode()})
+            except Exception:
+                continue
+    except Exception:
+        print('Crests unavailable this run', flush=True)
+
+
 def save_opponent(run_id, match, deadline):
     """Record the opponent's EA record right after a new match. Best effort: never affects saving the match."""
     try:
@@ -83,6 +122,7 @@ def run():
     saved_new = False
     deadline = time.monotonic() + 170
     states = {}
+    crests = set()
     endpoints = [(kind, f'clubs/matches?platform={PLATFORM}&clubIds={CLUB}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
     endpoints += [('info', f'clubs/info?platform={PLATFORM}&clubIds={CLUB}'),
                   ('overallStats', f'clubs/overallStats?platform={PLATFORM}&clubIds={CLUB}'),
@@ -105,6 +145,7 @@ def run():
                             if not isinstance(match, dict):
                                 raise RuntimeError('Invalid match record')
                             match['_matchType'] = key
+                            crests |= crest_ids(match)
                             saved = api('/admin/match', {'runId': run_id, 'match': match})
                         except RuntimeError:
                             failures += 1
@@ -115,6 +156,8 @@ def run():
                     if failures:
                         raise RuntimeError(f'{failures} match records failed validation or persistence')
                 else:
+                    if key == 'info':
+                        crests |= crest_ids(data)
                     api('/admin/snapshot', {'runId': run_id, 'component': key, 'data': data})
                 states[key] = {'state': 'ok', 'count': len(data) if key in FEEDS else None}
             except Exception as error:
@@ -123,6 +166,7 @@ def run():
             time.sleep(1)
     finally:
         result = api('/admin/finish', {'runId': run_id, 'endpoints': states})
+    sync_crests(crests, time.monotonic() + 30)
     print('Collection: ' + result['status'] + (' (stale)' if result.get('stale') else ''))
     if result.get('recovered'):
         print('Match feeds recovered after a stale period')
@@ -148,6 +192,7 @@ def run_registered(*, workers=1, return_count=False):
         states = {}
         plan = club.get('plan') or {}
         saved_new = False
+        crests = set()
         endpoints = [(kind, f'clubs/matches?platform={platform}&clubIds={club_id}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
         endpoints += [('info', f'clubs/info?platform={platform}&clubIds={club_id}'),
                       ('overallStats', f'clubs/overallStats?platform={platform}&clubIds={club_id}'),
@@ -169,6 +214,7 @@ def run_registered(*, workers=1, return_count=False):
                                 if not isinstance(match, dict):
                                     raise RuntimeError('Invalid match record')
                                 match['_matchType'] = key
+                                crests |= crest_ids(match)
                                 saved = api('/admin/clubs/match', {**identity, 'match': match})
                                 if saved.get('state') in ('quarantined', 'held'):
                                     failed += 1
@@ -179,6 +225,8 @@ def run_registered(*, workers=1, return_count=False):
                         if failed:
                             raise RuntimeError(f'{failed} match records failed persistence')
                     else:
+                        if key == 'info':
+                            crests |= crest_ids(data)
                         api('/admin/clubs/snapshot', {**identity, 'component': key, 'data': data})
                     states[key] = {'state': 'ok'}
                 except Exception as error:
@@ -186,6 +234,7 @@ def run_registered(*, workers=1, return_count=False):
                 time.sleep(1)
         finally:
             result = api('/admin/clubs/finish', {**identity, 'endpoints': states})
+        sync_crests(crests, time.monotonic() + 30)
         print('Registered club collection: ' + result['status'], flush=True)
     clubs = claimed.get('clubs', [])
     try:
