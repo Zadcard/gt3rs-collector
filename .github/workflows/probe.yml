@@ -1,18 +1,46 @@
-name: Cloud EA connectivity probe
+# Applied only on codex/scale-trial-20261008; production main remains unchanged.
+name: ClubsKeep 24-hour capacity trial
+run-name: ClubsKeep real clubs — isolated 24-hour trial
 on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: clubskeep-scale-trial-20261008
+  cancel-in-progress: false
+env:
+  HUB_URL: https://clubskeep-scale-trial-20261008.zadcard06.workers.dev
+  COLLECTOR_TOKEN: ${{ secrets.SCALE_TRIAL_TOKEN }}
 jobs:
-  probe:
+  discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 120
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.11'
-      - run: pip install curl_cffi==0.13.0
-      - run: python probe.py
+      - run: pip install -r requirements.txt
+      - run: python scale_trial.py discover
+        env:
+          SCALE_TRIAL_PASSWORD: ${{ secrets.SCALE_TRIAL_PASSWORD }}
+  collect:
+    needs: discover
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        segment: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python scale_trial.py segment --minutes 340
