@@ -20,7 +20,9 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install --require-hashes -r requirements.txt
+      - name: Install age (backup encryption)
+        run: sudo apt-get install -y --no-install-recommends age
       - name: Open private backup repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -31,6 +33,7 @@ jobs:
         env:
           BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
           BACKUP_DIR: private-backup/backups
+          BACKUP_AGE_RECIPIENT: ${{ vars.BACKUP_AGE_RECIPIENT }}
         run: python backup.py
       - name: Save private backup
         working-directory: private-backup

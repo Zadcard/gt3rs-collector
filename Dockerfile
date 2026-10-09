@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 WORKDIR /app
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --require-hashes -r requirements.txt
 COPY collect.py daemon.py ./
 RUN useradd --system --uid 10001 collector
 USER collector

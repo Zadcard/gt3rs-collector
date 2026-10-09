@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-      - run: pip install -r requirements.txt
+      - run: pip install --require-hashes -r requirements.txt
       - name: Capture and archive valid EA feeds
         env:
           COLLECTOR_TOKEN: ${{ secrets.COLLECTOR_TOKEN }}

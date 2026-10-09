@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -12,6 +13,17 @@ from pathlib import Path
 from collect import api, CLUB
 
 RESULT = Path(os.environ.get('BACKUP_RESULT', 'backup-result.json'))
+# Public age key (age1...). When set, each backup is encrypted to it before it leaves this runner, so the backup
+# repository holds no readable account data (emails, password hashes). The matching private key stays offline.
+AGE_RECIPIENT = os.environ.get('BACKUP_AGE_RECIPIENT', '').strip()
+
+
+def encrypt(plain, target):
+    if not re.fullmatch(r'age1[0-9a-z]{58}', AGE_RECIPIENT):
+        raise RuntimeError('BACKUP_AGE_RECIPIENT is not a valid age public key')
+    subprocess.run(['age', '--encrypt', '--recipient', AGE_RECIPIENT, '--output', str(target), str(plain)], check=True)
+    if not target.read_bytes().startswith(b'age-encryption.org/v1\n'):
+        raise RuntimeError('Encrypted backup failed its format check')
 
 
 def verify_restore(schema, tables):
@@ -109,9 +121,21 @@ def run():
     if gzip.decompress(temp.read_bytes()) != data:
         temp.unlink()
         raise RuntimeError('Backup file failed read-back verification')
-    temp.replace(target)
-    target.with_suffix('.sha256').write_text(hashlib.sha256(compressed).hexdigest() + '\n')
-    for old in sorted(out.glob('gt3rs-????-??-??.json.gz'))[:-30]:
+    if AGE_RECIPIENT:
+        sealed = target.with_name(name + '.age')
+        encrypt(temp, sealed)
+        temp.unlink()
+        target = sealed
+        # Once backups are encrypted, readable copies are removed from the working tree too.
+        for plain in out.glob('gt3rs-????-??-??.json.gz'):
+            plain.unlink()
+            plain.with_suffix('.sha256').unlink(missing_ok=True)
+    else:
+        print('WARNING: BACKUP_AGE_RECIPIENT is not set; this backup is not encrypted')
+        temp.replace(target)
+    target.with_suffix('.sha256').write_text(hashlib.sha256(target.read_bytes()).hexdigest() + '\n')
+    saved = sorted(list(out.glob('gt3rs-????-??-??.json.gz')) + list(out.glob('gt3rs-????-??-??.json.gz.age')), key=lambda p: p.name[:16])
+    for old in saved[:-30]:
         old.unlink()
         old.with_suffix('.sha256').unlink(missing_ok=True)
     print(f'Private backup ready: {len(export["tables"]["matches"])} matches; {len(compressed)} compressed bytes')
