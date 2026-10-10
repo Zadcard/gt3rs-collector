@@ -51,7 +51,7 @@ def run_service(stop, *, max_seconds=0):
             if stop.is_set():
                 break
             try:
-                count = collect.run_registered(workers=2, return_count=True)
+                count = collect.run_registered(workers=collect.WORKERS, return_count=True)
             except Exception:
                 print('Club queue check failed; will retry', flush=True)
                 count = 0

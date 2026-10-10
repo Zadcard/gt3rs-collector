@@ -12,6 +12,12 @@ TOKEN = os.environ.get('COLLECTOR_TOKEN', '')
 FEEDS = ('leagueMatch', 'playoffMatch', 'friendlyMatch')
 CLUB = '205974'  # GT3 RS (club.json in the hub repo)
 PLATFORM = 'common-gen5'
+# Clubs checked at the same time. Each club still waits a second between its own EA requests; raise slowly, EA may
+# start refusing requests if too many arrive at once.
+try:
+    WORKERS = max(1, min(int(os.environ.get('COLLECTOR_WORKERS') or 4), 8))
+except ValueError:
+    WORKERS = 4
 
 
 def api(path, payload, token=None, retries=1):
@@ -181,9 +187,29 @@ def run():
     return 0
 
 
+def save_matches(identity, records):
+    """Save one feed's matches in a single request; per-match requests remain for hubs without the batch route."""
+    if not records:
+        return []
+    try:
+        states = api('/admin/clubs/matches', {**identity, 'matches': records}).get('states')
+    except RuntimeError as error:
+        if 'HTTP 404' not in str(error):
+            raise
+        states = []
+        for match in records:
+            try:
+                states.append(api('/admin/clubs/match', {**identity, 'match': match}).get('state'))
+            except RuntimeError:
+                states.append('failed')
+    if not isinstance(states, list) or len(states) != len(records):
+        raise RuntimeError('Hub did not report every match')
+    return states
+
+
 def run_registered(*, workers=1, return_count=False):
     """Collect each claimed club with its own identity; the hub owns scheduling and overlap control."""
-    claimed = api('/admin/clubs/claim', {}, retries=0)
+    claimed = api('/admin/clubs/claim', {'limit': workers}, retries=0)
     lease = claimed.get('lease')
     def capture(club):
         platform, club_id = club['platform'], club['clubId']
@@ -208,20 +234,16 @@ def run_registered(*, workers=1, return_count=False):
                     if key in FEEDS:
                         if not isinstance(data, list) or len(data) > 10:
                             raise RuntimeError('Invalid match feed')
-                        failed = 0
-                        for match in data:
-                            try:
-                                if not isinstance(match, dict):
-                                    raise RuntimeError('Invalid match record')
-                                match['_matchType'] = key
-                                crests |= crest_ids(match)
-                                saved = api('/admin/clubs/match', {**identity, 'match': match})
-                                if saved.get('state') in ('quarantined', 'held'):
-                                    failed += 1
-                                if saved.get('state') == 'new':
-                                    saved_new = True
-                            except RuntimeError:
+                        records = [match for match in data if isinstance(match, dict)]
+                        failed = len(data) - len(records)
+                        for match in records:
+                            match['_matchType'] = key
+                            crests |= crest_ids(match)
+                        for state in save_matches(identity, records):
+                            if state in ('quarantined', 'held', 'failed'):
                                 failed += 1
+                            if state == 'new':
+                                saved_new = True
                         if failed:
                             raise RuntimeError(f'{failed} match records failed persistence')
                     else:
@@ -240,7 +262,7 @@ def run_registered(*, workers=1, return_count=False):
     try:
         if workers > 1:
             from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=min(workers, 2)) as pool:
+            with ThreadPoolExecutor(max_workers=min(workers, 8)) as pool:
                 futures = [pool.submit(capture, club) for club in clubs]
                 for future in futures:
                     try:
@@ -306,7 +328,7 @@ if __name__ == '__main__':
         legacy_result = run()
         drain_until = time.monotonic() + 120
         while time.monotonic() < drain_until:
-            if not run_registered(workers=2, return_count=True):
+            if not run_registered(workers=WORKERS, return_count=True):
                 break
         raise SystemExit(legacy_result)
     except RuntimeError as error:
