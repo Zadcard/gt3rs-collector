@@ -1,0 +1,28 @@
+name: Resident collector
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+# The hub's timer starts this whenever no resident collector holds the lease, so one run follows the last.
+concurrency:
+  group: club-resident
+  cancel-in-progress: false
+jobs:
+  resident:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install --require-hashes -r requirements.txt
+      - name: Check EA every minute while a club is active, every five minutes otherwise
+        env:
+          COLLECTOR_TOKEN: ${{ secrets.COLLECTOR_TOKEN }}
+          # 5 h 40 min, then a clean stop so the lease is released before the job limit.
+          COLLECTOR_MAX_SECONDS: '20400'
+        run: python daemon.py
