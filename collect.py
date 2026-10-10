@@ -7,7 +7,7 @@ import re
 from urllib.parse import urlencode
 from curl_cffi import requests
 
-HUB = os.environ.get('HUB_URL', 'https://gt3rs-hub.zadcard06.workers.dev').rstrip('/')
+HUB = os.environ.get('HUB_URL', 'https://clubskeep.zadcard06.workers.dev').rstrip('/')
 TOKEN = os.environ.get('COLLECTOR_TOKEN', '')
 FEEDS = ('leagueMatch', 'playoffMatch', 'friendlyMatch')
 CLUB = '205974'  # GT3 RS (club.json in the hub repo)
