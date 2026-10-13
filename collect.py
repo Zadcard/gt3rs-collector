@@ -95,6 +95,26 @@ def sync_crests(ids, deadline):
         print('Crests unavailable this run', flush=True)
 
 
+def division_row(platform, club_id, name, deadline):
+    """The club's row from EA's leaderboard search (it carries currentDivision); found by name, matched by ID."""
+    if not isinstance(name, str) or not name.strip():
+        raise RuntimeError('Club name unknown')
+    for endpoint in ('allTimeLeaderboard/search', 'currentSeasonLeaderboard/search'):
+        data = ea(endpoint + '?' + urlencode({'platform': platform, 'clubName': name.strip(), 'maxResultCount': 100}), deadline)
+        items = list(data.values()) if isinstance(data, dict) else data if isinstance(data, list) else []
+        for item in items:
+            if isinstance(item, dict) and str(item.get('clubId') or (item.get('clubInfo') or {}).get('clubId') or '') == club_id:
+                return {**item, 'clubId': club_id}
+    raise RuntimeError('Club not found in EA leaderboard search')
+
+
+def club_name(data, club_id, fallback):
+    """Name from a clubs/info response, else the name the hub sent."""
+    info = data.get(club_id) if isinstance(data, dict) else None
+    name = info.get('name') if isinstance(info, dict) else None
+    return name if isinstance(name, str) and name.strip() else fallback
+
+
 def save_opponent(run_id, match, deadline):
     """Record the opponent's EA record right after a new match. Best effort: never affects saving the match."""
     try:
@@ -132,7 +152,11 @@ def run():
     endpoints = [(kind, f'clubs/matches?platform={PLATFORM}&clubIds={CLUB}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
     endpoints += [('info', f'clubs/info?platform={PLATFORM}&clubIds={CLUB}'),
                   ('overallStats', f'clubs/overallStats?platform={PLATFORM}&clubIds={CLUB}'),
-                  ('members', f'members/stats?platform={PLATFORM}&clubId={CLUB}')]
+                  ('members', f'members/stats?platform={PLATFORM}&clubId={CLUB}'),
+                  ('division', None)]
+    # Older hubs neither plan nor accept the division; leave it out entirely for them.
+    endpoints = [(key, path) for key, path in endpoints if key != 'division' or 'division' in plan]
+    name = start.get('clubName')
     try:
         for key, path in endpoints:
             wanted = plan.get(key, 'always')
@@ -141,7 +165,7 @@ def run():
                 print(key + ': skipped', flush=True)
                 continue
             try:
-                data = ea(path, deadline)
+                data = division_row(PLATFORM, CLUB, name, deadline) if key == 'division' else ea(path, deadline)
                 if key in FEEDS:
                     if not isinstance(data, list) or len(data) > 10:
                         raise RuntimeError('Invalid match feed')
@@ -164,6 +188,7 @@ def run():
                 else:
                     if key == 'info':
                         crests |= crest_ids(data)
+                        name = club_name(data, CLUB, name)
                     api('/admin/snapshot', {'runId': run_id, 'component': key, 'data': data})
                 states[key] = {'state': 'ok', 'count': len(data) if key in FEEDS else None}
             except Exception as error:
@@ -222,7 +247,10 @@ def run_registered(*, workers=1, return_count=False):
         endpoints = [(kind, f'clubs/matches?platform={platform}&clubIds={club_id}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
         endpoints += [('info', f'clubs/info?platform={platform}&clubIds={club_id}'),
                       ('overallStats', f'clubs/overallStats?platform={platform}&clubIds={club_id}'),
-                      ('members', f'members/stats?platform={platform}&clubId={club_id}')]
+                      ('members', f'members/stats?platform={platform}&clubId={club_id}'),
+                      ('division', None)]
+        endpoints = [(key, path) for key, path in endpoints if key != 'division' or 'division' in plan]
+        name = club.get('name')
         try:
             for key, path in endpoints:
                 wanted = plan.get(key, 'always')
@@ -230,7 +258,7 @@ def run_registered(*, workers=1, return_count=False):
                     states[key] = {'state': 'skipped'}
                     continue
                 try:
-                    data = ea(path, deadline)
+                    data = division_row(platform, club_id, name, deadline) if key == 'division' else ea(path, deadline)
                     if key in FEEDS:
                         if not isinstance(data, list) or len(data) > 10:
                             raise RuntimeError('Invalid match feed')
@@ -249,6 +277,7 @@ def run_registered(*, workers=1, return_count=False):
                     else:
                         if key == 'info':
                             crests |= crest_ids(data)
+                            name = club_name(data, club_id, name)
                         api('/admin/clubs/snapshot', {**identity, 'component': key, 'data': data})
                     states[key] = {'state': 'ok'}
                 except Exception as error:
