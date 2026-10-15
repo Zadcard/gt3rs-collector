@@ -2,7 +2,7 @@
 
 This public repository contains only the cloud collector, connectivity probe, and workflow definitions. The website source, database, raw match payloads, backups, and credentials are stored separately.
 
-- The hub decides when to check: every minute while the club is active (a match in the last 3 hours, or a Refresh request in the last hour) and every five minutes otherwise. These are resident-service targets. Without that service, the existing Cloudflare timer dispatches the GitHub fallback about every five minutes, plus runner startup and queue time. EA's recent window cannot guarantee no losses during an outage.
+- The hub decides when to check: every minute while the club is active (a match in the last 3 hours, or a Refresh request in the last hour) and every five minutes otherwise. Other tracked clubs that have not played for days are checked every 15 or 30 minutes (see HOSTING.md). These are resident-service targets. Without that service, the existing Cloudflare timer dispatches the GitHub fallback about every five minutes, plus runner startup and queue time. EA's recent window cannot guarantee no losses during an outage.
 - Each run asks the hub what to fetch: all three match feeds; club record and squad stats every run while playing, otherwise only after a new match (or every 6 hours); club info daily. Failing match feeds retry after one minute, with backoff capped at five minutes. Non-match endpoints retain their longer backoff.
 - The site marks match feeds stale after five minutes without a successful match-feed check while playing (15 minutes otherwise).
 - League, playoff, and friendly results are validated and merged independently. A failed feed cannot erase archived matches.
