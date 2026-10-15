@@ -19,12 +19,17 @@ The image was built and its packaged modules imported successfully in GitHub val
 
 From this directory, provide the token in the host's protected secret environment, then run `docker compose up --build -d`. `compose.yml` runs the process without root privileges, restarts it on failure, gives it five minutes to finish on shutdown, and keeps the filesystem read-only except for a temporary heartbeat file.
 
+## Free: resident collector on GitHub Actions
+
+`resident.yml` runs `daemon.py` inside GitHub Actions for about 5 h 40 min, so the collector repo (public, so Actions minutes are free) acts as the resident collector with no hosting. The hub's five-minute cron starts the next run once the lease lapses; expect a gap of a few minutes between runs. Copy `resident.yml` to the collector repo's `.github/workflows/` next to `collect.yml`; it uses the same `COLLECTOR_TOKEN` secret. `collect.yml` stays as the single-pass fallback for Refresh.
+
 ## Scheduling and recovery
 
-- Active: last match within three hours, or a refresh request within one hour. Due every minute. Idle: due every five minutes, including overnight.
-- The process wakes within ten seconds for new work. Clubs are claimed in oldest-due order, two at a time, and processed independently. Targets depend on EA response time and queue capacity; more clubs may require more capacity and partitioned collectors.
-- A server-enforced resident lease renews every 20 seconds and expires after 90 seconds. Only its owner can renew or release it. Starting a second instance does not double EA traffic.
-- Cloudflare's existing five-minute cron dispatches the GitHub fallback when that lease expires. GitHub startup and queue time still apply. Search and daily backups remain independent.
+- Active: last match within three hours, or a refresh request within one hour. Due every minute; only the feed of the club's latest match is read every minute, the other two at least every three minutes. Idle tracked clubs: every 5 minutes if they played in the last two days, 15 minutes within two weeks, otherwise 30 minutes (EA keeps 10 matches per type, so 30 minutes cannot lose one). The founding club stays on five minutes.
+- Clubs are claimed in oldest-due order by a pool of workers (`COLLECTOR_WORKERS`, default 8): a worker that finishes takes the next due club at once. EA requests are spaced by `COLLECTOR_EA_RPS` (default 4 per second per collector), shared by all workers.
+- More capacity: the hub keeps `COLLECTOR_RESIDENTS` resident collectors running (wrangler var, 1–4; 2 by default). Each runs `resident.yml` with its own `slot` on another GitHub runner, so EA's load is spread over several addresses. Slot 1 also checks the founding club. Extra slots start only while clubs are waiting.
+- A server-enforced resident lease per slot renews every 20 seconds and expires after 90 seconds. Only its owner can renew or release it. Starting a second instance of the same slot does not double EA traffic.
+- Cloudflare's existing five-minute cron starts `resident.yml` (below) when that lease expires. GitHub startup and queue time still apply. Search and daily backups remain independent.
 - Archive writes and backups retain their shared lease protection. Individual club identities, raw payload retention, duplicate handling and fuller-stat preservation remain in place.
 - The service survives individual club failures. Match-feed failures retry rapidly; the root collector's match backoff is capped at five minutes. Scoped club failures retry in one minute.
 - Scoped status tracks successful checks per match feed, so a failed attempt cannot make stale data look fresh. Empty successful feeds are distinguished from unavailable feeds.
