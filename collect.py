@@ -4,6 +4,7 @@ import json
 import os
 import time
 import re
+import threading
 from urllib.parse import urlencode
 from curl_cffi import requests
 
@@ -12,12 +13,35 @@ TOKEN = os.environ.get('COLLECTOR_TOKEN', '')
 FEEDS = ('leagueMatch', 'playoffMatch', 'friendlyMatch')
 CLUB = '205974'  # GT3 RS (club.json in the hub repo)
 PLATFORM = 'common-gen5'
-# Clubs checked at the same time. Each club still waits a second between its own EA requests; raise slowly, EA may
-# start refusing requests if too many arrive at once.
+# Clubs checked at the same time. EA's load is set by EA_RATE below, not by this number: more workers only keep that
+# pace filled while other clubs wait on the hub.
 try:
-    WORKERS = max(1, min(int(os.environ.get('COLLECTOR_WORKERS') or 4), 8))
+    WORKERS = max(1, min(int(os.environ.get('COLLECTOR_WORKERS') or 8), 16))
 except ValueError:
-    WORKERS = 4
+    WORKERS = 8
+# EA requests per second from this collector, shared by all its workers. Raise slowly: EA may start refusing
+# requests if too many arrive at once. Each extra resident collector runs on another runner with its own pace.
+try:
+    EA_RATE = max(0.5, min(float(os.environ.get('COLLECTOR_EA_RPS') or 4), 10))
+except ValueError:
+    EA_RATE = 4.0
+
+
+class Pace:
+    """Spaces requests evenly across threads: each caller gets the next free slot and waits for it."""
+    def __init__(self, rate):
+        self.gap, self.next, self.lock = 1 / rate, 0.0, threading.Lock()
+
+    def wait(self):
+        with self.lock:
+            now = time.monotonic()
+            at = max(now, self.next)
+            self.next = at + self.gap
+        if at > now:
+            time.sleep(at - now)
+
+
+EA_PACE = Pace(EA_RATE)
 
 
 def api(path, payload, token=None, retries=1):
@@ -42,6 +66,7 @@ def ea(path, deadline):
     for attempt in range(2):
         if time.monotonic() > deadline:
             raise RuntimeError('Run time budget reached')
+        EA_PACE.wait()
         try:
             response = requests.get('https://proclubs.ea.com/api/fc/' + path,
                 impersonate='chrome', timeout=12,
@@ -194,7 +219,6 @@ def run():
             except Exception as error:
                 states[key] = {'state': 'error', 'reason': str(error)[:120]}
             print(key + ': ' + states[key]['state'], flush=True)
-            time.sleep(1)
     finally:
         result = api('/admin/finish', {'runId': run_id, 'endpoints': states})
     sync_crests(crests, time.monotonic() + 30)
@@ -232,67 +256,69 @@ def save_matches(identity, records):
     return states
 
 
+def capture_club(club):
+    """Check one claimed club with its own identity and report every endpoint's result to the hub."""
+    platform, club_id = club['platform'], club['clubId']
+    identity = {'platform': platform, 'clubId': club_id, 'runId': club['runId']}
+    deadline = time.monotonic() + 170
+    states = {}
+    plan = club.get('plan') or {}
+    saved_new = False
+    crests = set()
+    endpoints = [(kind, f'clubs/matches?platform={platform}&clubIds={club_id}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
+    endpoints += [('info', f'clubs/info?platform={platform}&clubIds={club_id}'),
+                  ('overallStats', f'clubs/overallStats?platform={platform}&clubIds={club_id}'),
+                  ('members', f'members/stats?platform={platform}&clubId={club_id}'),
+                  ('division', None)]
+    endpoints = [(key, path) for key, path in endpoints if key != 'division' or 'division' in plan]
+    name = club.get('name')
+    try:
+        for key, path in endpoints:
+            wanted = plan.get(key, 'always')
+            if wanted == 'skip' or (wanted == 'if-new' and not saved_new):
+                states[key] = {'state': 'skipped'}
+                continue
+            try:
+                data = division_row(platform, club_id, name, deadline) if key == 'division' else ea(path, deadline)
+                if key in FEEDS:
+                    if not isinstance(data, list) or len(data) > 10:
+                        raise RuntimeError('Invalid match feed')
+                    records = [match for match in data if isinstance(match, dict)]
+                    failed = len(data) - len(records)
+                    for match in records:
+                        match['_matchType'] = key
+                        crests |= crest_ids(match)
+                    for state in save_matches(identity, records):
+                        if state in ('quarantined', 'held', 'failed'):
+                            failed += 1
+                        if state == 'new':
+                            saved_new = True
+                    if failed:
+                        raise RuntimeError(f'{failed} match records failed persistence')
+                else:
+                    if key == 'info':
+                        crests |= crest_ids(data)
+                        name = club_name(data, club_id, name)
+                    api('/admin/clubs/snapshot', {**identity, 'component': key, 'data': data})
+                states[key] = {'state': 'ok'}
+            except Exception as error:
+                states[key] = {'state': 'error', 'reason': str(error)[:120]}
+    finally:
+        result = api('/admin/clubs/finish', {**identity, 'endpoints': states})
+    sync_crests(crests, time.monotonic() + 30)
+    print('Registered club collection: ' + result['status'], flush=True)
+
+
 def run_registered(*, workers=1, return_count=False):
-    """Collect each claimed club with its own identity; the hub owns scheduling and overlap control."""
+    """Collect one claimed batch of clubs; the hub owns scheduling and overlap control."""
     claimed = api('/admin/clubs/claim', {'limit': workers}, retries=0)
     lease = claimed.get('lease')
-    def capture(club):
-        platform, club_id = club['platform'], club['clubId']
-        identity = {'platform': platform, 'clubId': club_id, 'runId': club['runId']}
-        deadline = time.monotonic() + 170
-        states = {}
-        plan = club.get('plan') or {}
-        saved_new = False
-        crests = set()
-        endpoints = [(kind, f'clubs/matches?platform={platform}&clubIds={club_id}&matchType={kind}&maxResultCount=10') for kind in FEEDS]
-        endpoints += [('info', f'clubs/info?platform={platform}&clubIds={club_id}'),
-                      ('overallStats', f'clubs/overallStats?platform={platform}&clubIds={club_id}'),
-                      ('members', f'members/stats?platform={platform}&clubId={club_id}'),
-                      ('division', None)]
-        endpoints = [(key, path) for key, path in endpoints if key != 'division' or 'division' in plan]
-        name = club.get('name')
-        try:
-            for key, path in endpoints:
-                wanted = plan.get(key, 'always')
-                if wanted == 'skip' or (wanted == 'if-new' and not saved_new):
-                    states[key] = {'state': 'skipped'}
-                    continue
-                try:
-                    data = division_row(platform, club_id, name, deadline) if key == 'division' else ea(path, deadline)
-                    if key in FEEDS:
-                        if not isinstance(data, list) or len(data) > 10:
-                            raise RuntimeError('Invalid match feed')
-                        records = [match for match in data if isinstance(match, dict)]
-                        failed = len(data) - len(records)
-                        for match in records:
-                            match['_matchType'] = key
-                            crests |= crest_ids(match)
-                        for state in save_matches(identity, records):
-                            if state in ('quarantined', 'held', 'failed'):
-                                failed += 1
-                            if state == 'new':
-                                saved_new = True
-                        if failed:
-                            raise RuntimeError(f'{failed} match records failed persistence')
-                    else:
-                        if key == 'info':
-                            crests |= crest_ids(data)
-                            name = club_name(data, club_id, name)
-                        api('/admin/clubs/snapshot', {**identity, 'component': key, 'data': data})
-                    states[key] = {'state': 'ok'}
-                except Exception as error:
-                    states[key] = {'state': 'error', 'reason': str(error)[:120]}
-                time.sleep(1)
-        finally:
-            result = api('/admin/clubs/finish', {**identity, 'endpoints': states})
-        sync_crests(crests, time.monotonic() + 30)
-        print('Registered club collection: ' + result['status'], flush=True)
     clubs = claimed.get('clubs', [])
     try:
         if workers > 1:
             from concurrent.futures import ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=min(workers, 8)) as pool:
-                futures = [pool.submit(capture, club) for club in clubs]
+            with ThreadPoolExecutor(max_workers=min(workers, 16)) as pool:
+                futures = [pool.submit(capture_club, club) for club in clubs]
                 for future in futures:
                     try:
                         future.result()
@@ -301,13 +327,52 @@ def run_registered(*, workers=1, return_count=False):
         else:
             for club in clubs:
                 try:
-                    capture(club)
+                    capture_club(club)
                 except Exception:
                     print('One club check failed; other clubs continue', flush=True)
     finally:
         if lease:
             api('/admin/clubs/release', {'lease': lease})
     return len(clubs) if return_count else 0
+
+
+def run_pool(stop, workers=None, idle_seconds=10):
+    """Keep `workers` club checks running until `stop` is set. A worker that finishes takes the next due club at
+    once, so no club waits for the slowest check of a batch; EA_PACE keeps EA's load the same at any worker count."""
+    from concurrent.futures import ThreadPoolExecutor
+    workers = workers or WORKERS
+    free = threading.Semaphore(workers)
+    checked = 0
+
+    def check(club):
+        try:
+            capture_club(club)
+        except Exception:
+            print('One club check failed; other clubs continue', flush=True)
+        finally:
+            free.release()
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        while not stop.is_set():
+            if not free.acquire(timeout=1):
+                continue
+            wanted = 1
+            while wanted < min(workers, 8) and free.acquire(blocking=False):
+                wanted += 1
+            try:
+                clubs = api('/admin/clubs/claim', {'limit': wanted}, retries=0).get('clubs', [])
+            except Exception:
+                print('Club queue check failed; will retry', flush=True)
+                clubs = []
+            for _ in range(wanted - len(clubs)):
+                free.release()
+            for club in clubs:
+                pool.submit(check, club)
+            checked += len(clubs)
+            # Fewer clubs than asked for means the queue is empty for now.
+            if len(clubs) < wanted:
+                stop.wait(idle_seconds)
+    return checked
 
 
 def search_clubs(query, platform, deadline):
