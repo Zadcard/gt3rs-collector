@@ -1,11 +1,16 @@
 name: Resident collector
 on:
   workflow_dispatch:
+    inputs:
+      slot:
+        description: 'Collector slot (1 also checks the founding club; 2-4 share the club queue from another runner)'
+        required: false
+        default: '1'
+# The hub's timer starts each slot whenever no resident collector holds its lease, so one run follows the last.
 permissions:
   contents: read
-# The hub's timer starts this whenever no resident collector holds the lease, so one run follows the last.
 concurrency:
-  group: club-resident
+  group: ${{ (inputs.slot == '' || inputs.slot == '1') && 'club-resident' || format('club-resident-{0}', inputs.slot) }}
   cancel-in-progress: false
 jobs:
   resident:
@@ -23,6 +28,7 @@ jobs:
       - name: Check EA every minute while a club is active, every five minutes otherwise
         env:
           COLLECTOR_TOKEN: ${{ secrets.COLLECTOR_TOKEN }}
+          COLLECTOR_SLOT: ${{ inputs.slot || '1' }}
           # 5 h 40 min, then a clean stop so the lease is released before the job limit.
           COLLECTOR_MAX_SECONDS: '20400'
         run: python daemon.py
