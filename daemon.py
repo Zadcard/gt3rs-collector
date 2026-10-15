@@ -9,6 +9,12 @@ import uuid
 import collect
 
 HEALTH_FILE = Path('/tmp/club-collector-health.json')
+# Several resident collectors can share the club queue, each on its own runner (resident.yml's slot input). Slot 1 also
+# checks the founding club; the hub keeps one lease per slot so a slot never runs twice.
+try:
+    SLOT = max(1, min(int(os.environ.get('COLLECTOR_SLOT') or 1), 8))
+except ValueError:
+    SLOT = 1
 
 
 def run_service(stop, *, max_seconds=0):
@@ -16,7 +22,7 @@ def run_service(stop, *, max_seconds=0):
         raise RuntimeError('Missing collector credential')
     owner = str(uuid.uuid4())
     # Acquire before doing any work: two deployed replicas must not both poll EA.
-    collect.api('/admin/clubs/heartbeat', {'owner': owner}, retries=0)
+    collect.api('/admin/clubs/heartbeat', {'owner': owner, 'slot': SLOT}, retries=0)
     started = time.monotonic()
     next_root = 0
 
@@ -24,7 +30,7 @@ def run_service(stop, *, max_seconds=0):
         failures = 0
         while not stop.is_set():
             try:
-                collect.api('/admin/clubs/heartbeat', {'owner': owner})
+                collect.api('/admin/clubs/heartbeat', {'owner': owner, 'slot': SLOT})
                 HEALTH_FILE.write_text(json.dumps({'heartbeat': time.time()}))
                 failures = 0
             except Exception:
@@ -37,9 +43,12 @@ def run_service(stop, *, max_seconds=0):
 
     thread = threading.Thread(target=heartbeat, name='collector-heartbeat', daemon=True)
     thread.start()
+    # Tracked clubs: a pool of workers, each taking the next due club as soon as it is free.
+    queue = threading.Thread(target=collect.run_pool, args=(stop, collect.WORKERS), name='collector-queue', daemon=True)
+    queue.start()
     try:
         while not stop.is_set() and (not max_seconds or time.monotonic()-started < max_seconds):
-            if time.monotonic() >= next_root:
+            if SLOT == 1 and time.monotonic() >= next_root:
                 try:
                     # Server enforces the club's due time even though this process stays alive.
                     result = collect.run()
@@ -48,20 +57,14 @@ def run_service(stop, *, max_seconds=0):
                 except Exception:
                     print('Root club check failed; will retry', flush=True)
                 next_root = time.monotonic() + 15
-            if stop.is_set():
-                break
-            try:
-                count = collect.run_registered(workers=collect.WORKERS, return_count=True)
-            except Exception:
-                print('Club queue check failed; will retry', flush=True)
-                count = 0
-            # Drain overdue clubs without sleeping between batches. An empty queue waits ten seconds.
-            stop.wait(1 if count else 10)
+            stop.wait(1)
     finally:
         stop.set()
+        # Checks already started finish (each stops within about three minutes) before the lease is given back.
+        queue.join(timeout=200)
         thread.join(timeout=25)
         try:
-            collect.api('/admin/clubs/heartbeat', {'owner': owner, 'stop': True})
+            collect.api('/admin/clubs/heartbeat', {'owner': owner, 'slot': SLOT, 'stop': True})
         except Exception:
             pass  # The server expires a dead process's lease automatically.
         HEALTH_FILE.unlink(missing_ok=True)
