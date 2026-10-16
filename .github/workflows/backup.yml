@@ -11,7 +11,8 @@ concurrency:
 jobs:
   backup:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
+    # Large archives export in 500-row pages; R2 backups upload only chunks that changed.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -29,6 +30,7 @@ jobs:
           repository: Zadcard/gt3rs-archive-backups
           path: private-backup
           ssh-key: ${{ secrets.BACKUP_DEPLOY_KEY }}
+      # Saved to the hub's R2 bucket once it is bound (the hub says so); until then to the private repository below.
       - name: Export a consistent database snapshot
         env:
           BACKUP_TOKEN: ${{ secrets.BACKUP_TOKEN }}
