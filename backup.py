@@ -14,6 +14,10 @@ from pathlib import Path
 from urllib.parse import urlencode
 from collect import api, CLUB, HUB, requests
 
+# Table and column names go into SQL: lower-case letters, digits and underscores, not starting with a digit
+# (e.g. archive_sha256). Anything else fails the restore check.
+NAME = re.compile(r'[a-z_][a-z0-9_]*')
+
 RESULT = Path(os.environ.get('BACKUP_RESULT', 'backup-result.json'))
 # Public age key (age1...). When set, each backup is encrypted to it before it leaves this runner, so the backup
 # repository holds no readable account data (emails, password hashes). The matching private key stays offline.
@@ -78,11 +82,11 @@ class Restore:
         self.match_ids = []
 
     def load(self, table, packed):
-        if not re.fullmatch(r'[a-z_]+', table):
+        if not NAME.fullmatch(table):
             raise RuntimeError('Restore check failed: unexpected table name')
         rows = [json.loads(line) for line in gzip.decompress(packed).splitlines()]
         for row in rows:
-            if not all(re.fullmatch(r'[a-z_]+', key) for key in row):
+            if not all(NAME.fullmatch(key) for key in row):
                 raise RuntimeError('Restore check failed: unexpected column name')
             columns = ','.join('"' + key + '"' for key in row)
             self.db.execute(f'INSERT INTO {table} ({columns}) VALUES ({",".join("?" * len(row))})', list(row.values()))
@@ -185,7 +189,7 @@ def verify_restore(schema, tables):
         db.execute(sql)
     for table, rows in tables.items():
         for row in rows:
-            if not all(re.fullmatch(r'[a-z_]+', key) for key in row) or not re.fullmatch(r'[a-z_]+', table):
+            if not all(NAME.fullmatch(key) for key in row) or not NAME.fullmatch(table):
                 raise RuntimeError('Restore check failed: unexpected column name')
             columns = ','.join('"' + key + '"' for key in row)
             db.execute(f'INSERT INTO {table} ({columns}) VALUES ({",".join("?" * len(row))})', list(row.values()))
