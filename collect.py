@@ -121,10 +121,12 @@ def sync_crests(ids, deadline):
 
 
 def division_row(platform, club_id, name, deadline):
-    """The club's row from EA's leaderboard search (it carries currentDivision); found by name, matched by ID."""
+    """The club's row from EA's leaderboard search (it carries currentDivision); found by name, matched by ID.
+    The current-season board comes first: after the playoffs the all-time board's currentDivision stops updating
+    (GT3 RS read 7 there and 5 on the season board while the game showed Division 4)."""
     if not isinstance(name, str) or not name.strip():
         raise RuntimeError('Club name unknown')
-    for endpoint in ('allTimeLeaderboard/search', 'currentSeasonLeaderboard/search'):
+    for endpoint in ('currentSeasonLeaderboard/search', 'allTimeLeaderboard/search'):
         data = ea(endpoint + '?' + urlencode({'platform': platform, 'clubName': name.strip(), 'maxResultCount': 100}), deadline)
         items = list(data.values()) if isinstance(data, dict) else data if isinstance(data, list) else []
         for item in items:
